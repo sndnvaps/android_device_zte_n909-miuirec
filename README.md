@@ -11,7 +11,7 @@ git clone git@github.com:sndnvaps/android_device_zte_n909-miuirec.git -b cm-10.1
 
 `MIUI RECOVERY`源代码地址：
 
-(https://github.com/sndnvaps/miui_recovery)[https://github.com/sndnvaps/miui_recovery]
+[https://github.com/sndnvaps/miui_recovery](https://github.com/sndnvaps/miui_recovery)
 
 
 
