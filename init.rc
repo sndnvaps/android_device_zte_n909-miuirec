@@ -11,7 +11,7 @@ on early-init
 
 
 on init
-    export PATH /sbin:/system/bin
+    export PATH .:/sbin:/system/bin
     export ANDROID_ROOT /system
     export ANDROID_DATA /data
     export EXTERNAL_STORAGE /sdcard
@@ -19,15 +19,10 @@ on init
     export HOME /
     export USER root
     export HOSTNAME sndnvaps
-    export PS1 $USER@$HOSTNAME:${PWD:-?} #
+    export PS1 $USER@$HOSTNAME:${PWD:-?}~
 
     symlink /system/etc /etc
- 
-   symlink /sbin/busybox /system/bin/sh
-
-   chmod 0755 /sbin/busybox
     
-
     mkdir /boot
     mkdir /recovery
     mkdir /sdcard
@@ -39,10 +34,12 @@ on init
     mkdir /system
     mkdir /data
     mkdir /cache
+    mkdir /persist
+  #  mkdir /tmp
     mount /tmp /tmp tmpfs
-    /sbin/busybox mount -t ext4 /dev/block/platform/msm_sdcc.3/by-num/p12 /system  
+      
     chown root shell /tmp
-	chmod 0775 /tmp
+	chmod 0777 /tmp
 #	chmod 0755 /nv_set
 #	chmod 0755 /rmt_storage_recovery 
 

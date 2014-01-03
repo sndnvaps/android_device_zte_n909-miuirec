@@ -54,7 +54,8 @@
 
 #define NUM_BUFFERS 2
 
-
+//#define VI2 1 //Enable use vi2 in static int get_framebuffer(GGLSurface *fb)
+#define N909 1 //Enable use roundUpToPageSize(size_t x) func
 static GGLSurface font_ftex;
 
 // #define PRINT_SCREENINFO 1 // Enables printing of screen info to log
@@ -83,10 +84,11 @@ static int gr_vt_fd = -1;
 
 static struct fb_var_screeninfo vi;
 static struct fb_fix_screeninfo fi;
-
+#ifdef N909
 inline size_t roundUpToPageSize(size_t x) {  //add by sndnvaps 
 	return (x + (PAGE_SIZE - 1)) & ~(PAGE_SIZE - 1);
 }
+#endif
 
 #ifdef PRINT_SCREENINFO
 static void print_fb_var_screeninfo()
@@ -105,22 +107,34 @@ static void print_fb_var_screeninfo()
 static int get_framebuffer(GGLSurface *fb)
 {
     int fd;
+#ifdef VI2
     void *bits, *vi2;
+#else 
+    void *bits;
+#endif
 
     fd = open("/dev/graphics/fb0", O_RDWR);
     if (fd < 0) {
         perror("cannot open fb0");
         return -1;
     }
+#ifdef VI2
      vi2 = malloc(sizeof(vi) + sizeof(__u32));
     if (ioctl(fd, FBIOGET_VSCREENINFO, vi2) < 0) {
+#else 
+    if(ioctl(fd, FBIOGET_VSCREENINFO, &vi) < 0 ) {
+#endif
         perror("failed to get fb0 info");
         close(fd);
+#ifdef VI2
         free(vi2);
+#endif
         return -1;
     }
-memcpy((void*) &vi, vi2, sizeof(vi)); //add by sndnvaps 
+#ifdef VI2 
+      memcpy((void*) &vi, vi2, sizeof(vi)); //add by sndnvaps 
       free(vi2); // add by sndnvaps 
+#endif
 
     fprintf(stderr, "Pixel format: %dx%d @ %dbpp\n", vi.xres, vi.yres, vi.bits_per_pixel);
 
@@ -190,7 +204,9 @@ memcpy((void*) &vi, vi2, sizeof(vi)); //add by sndnvaps
         close(fd);
         return -1;
     }
+#ifdef N909
     size_t size = roundUpToPageSize(vi.yres * fi.line_length) * NUM_BUFFERS; //add by sndnvaps 
+#endif
     bits = mmap(0, fi.smem_len, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
     if (bits == MAP_FAILED) {
         perror("failed to mmap framebuffer");
@@ -213,8 +229,11 @@ memcpy((void*) &vi, vi2, sizeof(vi)); //add by sndnvaps
 #endif
     fb->data = bits;
     fb->format = PIXEL_FORMAT;
-    //memset(fb->data, 0, vi.yres * fb->stride * PIXEL_SIZE);
+#ifndef N909 
+    memset(fb->data, 0, vi.yres * fb->stride * PIXEL_SIZE);
+#else 
          memset(fb->data, 0, roundUpToPageSize(vi.yres * fb->stride * PIXEL_SIZE)); //add by sndnvaps 
+#endif
     fb++;
 
     /* check if we can use double buffering */
@@ -228,16 +247,28 @@ memcpy((void*) &vi, vi2, sizeof(vi)); //add by sndnvaps
     fb->height = vi.yres;
 #ifdef BOARD_HAS_JANKY_BACKBUFFER
     fb->stride = fi.line_length/2;
-    //fb->data = (void*) (((unsigned) bits) + vi.yres * fi.line_length);
+  #ifndef N909
+    fb->data = (void*) (((unsigned) bits) + vi.yres * fi.line_length);
+  #else
     fb->data = (void*) (((unsigned) bits) + roundUpToPageSize(vi.yres * fi.line_lenth)); //add by sndnvaps 
+  #endif
+
 #else
     fb->stride = vi.xres_virtual;
-    //fb->data = (void*) (((unsigned) bits) + vi.yres * fb->stride * PIXEL_SIZE);
+ #ifndef N909
+    fb->data = (void*) (((unsigned) bits) + vi.yres * fb->stride * PIXEL_SIZE);
+ #else 
      fb->data = (void*) (((unsigned) bits) + roundUpToPageSize(vi.yres * fb->stride * PIXEL_SIZE)); //add by sndnvaps 
+ #endif
+
 #endif
     fb->format = PIXEL_FORMAT;
-   // memset(fb->data, 0, vi.yres * fb->stride * PIXEL_SIZE);
+  #ifndef N909
+    memset(fb->data, 0, vi.yres * fb->stride * PIXEL_SIZE);
+ #else 
     memset(fb->data, 0, roundUpToPageSize(vi.yres * fb->stride * PIXEL_SIZE)); //add by sndnvaps 
+  #endif
+
 #ifdef PRINT_SCREENINFO
 	print_fb_var_screeninfo();
 #endif
@@ -319,7 +350,7 @@ static struct utf8_table utf8_table[] =
     {0xF8,  0xF0,   3*6,    0x1FFFFF,       0x10000,   /* 4 byte sequence */},
     {0xFC,  0xF8,   4*6,    0x3FFFFFF,      0x200000,  /* 5 byte sequence */},
     {0xFE,  0xFC,   5*6,    0x7FFFFFFF,     0x4000000, /* 6 byte sequence */},
-    {0,						       /* end of table    */}
+    {0   ,  0,       0,     0,              0,         /* end of table    */}
 };
 
 int

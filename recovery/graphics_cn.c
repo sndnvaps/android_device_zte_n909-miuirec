@@ -27,14 +27,12 @@
 
 #include <linux/fb.h>
 #include <linux/kd.h>
+#include <linux/msm_mdp.h>
 
 #include <pixelflinger/pixelflinger.h>
 
-#ifdef BOARD_USE_CUSTOM_RECOVERY_FONT
-#include BOARD_USE_CUSTOM_RECOVERY_FONT
-#else
 #include "font_10x18.h"
-#endif
+#include "chinese.h"
 
 #include "minui.h"
 
@@ -51,6 +49,18 @@
 
 #define NUM_BUFFERS 2
 
+#define BUILD_DEVICE_N909 1 //enable to use round_to_pagesize() 
+
+#ifdef BUILD_DEVICE_N909 
+
+inline size_t round_to_pagesize(size_t x) {
+	return (x + (PAGE_SIZE - 1)) & ~(PAGE_SIZE - 1);
+}
+#endif
+
+
+#define VI2 1 //just not need it now 
+
 typedef struct {
     GGLSurface texture;
     unsigned cwidth;
@@ -64,6 +74,10 @@ static GGLSurface gr_font_texture;
 static GGLSurface gr_framebuffer[NUM_BUFFERS];
 static GGLSurface gr_mem_surface;
 static unsigned gr_active_fb = 0;
+static unsigned double_buffering = 0;
+static int overscan_percent = OVERSCAN_PERCENT;
+static int overscan_offset_x = 0;
+static int overscan_offset_y = 0;
 
 static int gr_fb_fd = -1;
 static int gr_vt_fd = -1;
@@ -71,25 +85,38 @@ static int gr_vt_fd = -1;
 static struct fb_var_screeninfo vi;
 static struct fb_fix_screeninfo fi;
 
-inline size_t roundUpToPageSize(size_t x) {
-    return (x + (PAGE_SIZE-1)) & ~(PAGE_SIZE-1);
-}
 static int get_framebuffer(GGLSurface *fb)
 {
     int fd;
+#ifdef VI2
+    void *bits, *vi2;
+#else
     void *bits;
+#endif
 
     fd = open("/dev/graphics/fb0", O_RDWR);
     if (fd < 0) {
         perror("cannot open fb0");
         return -1;
     }
-
+#ifdef VI2
+    vi2 = malloc(sizeof(vi) + sizeof(__u32));
+    if (ioctl(fd, FBIOGET_VSCREENINFO, vi2) < 0) {
+#else
     if (ioctl(fd, FBIOGET_VSCREENINFO, &vi) < 0) {
+#endif
         perror("failed to get fb0 info");
         close(fd);
+#ifdef VI2
+	free(vi2);
+#endif
         return -1;
     }
+#ifdef VI2
+    memcpy((void*) &vi, vi2, sizeof(vi));
+    free(vi2);
+#endif
+    fprintf(stderr, "Pixel format: %dx%d @ %dbpp\n", vi.xres, vi.yres, vi.bits_per_pixel);
 
     vi.bits_per_pixel = PIXEL_SIZE * 8;
     if (PIXEL_FORMAT == GGL_PIXEL_FORMAT_BGRA_8888) {
@@ -131,14 +158,20 @@ static int get_framebuffer(GGLSurface *fb)
         close(fd);
         return -1;
     }
-
-    size_t size = roundUpToPageSize(vi.yres * fi.line_length) * NUM_BUFFERS ;
-    bits = mmap(0,size , PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+#ifdef BUILD_DEVICE_N909
+    size_t size = round_to_pagesize(vi.yres * fi.line_length) * NUM_BUFFERS;
+    bits = mmap(0, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+#else
+    bits = mmap(0, fi.smem_len, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+#endif
     if (bits == MAP_FAILED) {
         perror("failed to mmap framebuffer");
         close(fd);
         return -1;
     }
+
+    overscan_offset_x = vi.xres * overscan_percent / 100;
+    overscan_offset_y = vi.yres * overscan_percent / 100;
 
     fb->version = sizeof(*fb);
     fb->width = vi.xres;
@@ -146,17 +179,36 @@ static int get_framebuffer(GGLSurface *fb)
     fb->stride = fi.line_length/PIXEL_SIZE;
     fb->data = bits;
     fb->format = PIXEL_FORMAT;
-    memset(fb->data, 0,roundUpToPageSize(vi.yres * fi.line_length));
-
+#ifdef BUILD_DEVICE_N909
+    memset(fb->data, 0, round_to_pagesize(vi.yres * fi.line_length));
+#else
+    memset(fb->data, 0, vi.yres * fi.line_length);
+#endif
     fb++;
+
+    /* check if we can use double buffering */
+    if (vi.yres * fi.line_length * 2 > fi.smem_len)
+        return fd;
+
+    double_buffering = 1;
 
     fb->version = sizeof(*fb);
     fb->width = vi.xres;
     fb->height = vi.yres;
     fb->stride = fi.line_length/PIXEL_SIZE;
-    fb->data = (void*) (((unsigned) bits) + roundUpToPageSize(vi.yres * fi.line_length));
+#ifdef BUILD_DEVICE_N909
+    fb->data = (void*) (((unsigned) bits) + round_to_pagesize(vi.yres * fi.line_length));
+#else
+    fb->data = (void*) (((unsigned) bits) + vi.yres * fi.line_length);
+#endif
+
     fb->format = PIXEL_FORMAT;
-    memset(fb->data, 0, roundUpToPageSize(vi.yres * fi.line_length));
+#ifdef BUILD_DEVICE_N909
+    memset(fb->data, 0, round_to_pagesize(vi.yres * fi.line_length));
+#else
+    memset(fb->data, 0, vi.yres * fi.line_length);
+#endif
+
     return fd;
 }
 
@@ -171,7 +223,7 @@ static void get_memory_surface(GGLSurface* ms) {
 
 static void set_active_framebuffer(unsigned n)
 {
-    if (n > 1) return;
+    if (n > 1 || !double_buffering) return;
     vi.yres_virtual = vi.yres * NUM_BUFFERS;
     vi.yoffset = n * vi.yres;
     vi.bits_per_pixel = PIXEL_SIZE * 8;
@@ -185,7 +237,8 @@ void gr_flip(void)
     GGLContext *gl = gr_context;
 
     /* swap front and back buffers */
-    gr_active_fb = (gr_active_fb + 1) & 1;
+    if (double_buffering)
+        gr_active_fb = (gr_active_fb + 1) & 1;
 
     /* copy data from the in-memory surface to the buffer we're about
      * to make active. */
@@ -209,7 +262,7 @@ void gr_color(unsigned char r, unsigned char g, unsigned char b, unsigned char a
 
 int gr_measure(const char *s)
 {
-    return gr_font->cwidth * strlen(s);
+    return gr_font->cwidth * str_utf8_length(s);
 }
 
 void gr_font_size(int *x, int *y)
@@ -218,27 +271,59 @@ void gr_font_size(int *x, int *y)
     *y = gr_font->cheight;
 }
 
+static GGLSurface font_ftex;
+static int font_bitmap_count;
+static int font_char_per_bitmap = 128;
+static void** font_data;
+#include <sys/time.h>
+
+
 int gr_text(int x, int y, const char *s)
 {
     GGLContext *gl = gr_context;
-    GRFont *font = gr_font;
-    unsigned off;
+    GRFont *gfont = gr_font;
+    unsigned off, width, height, font_bitmap_width, n;
 
-    y -= font->ascent;
 
-    gl->bindTexture(gl, &font->texture);
+    x += overscan_offset_x;
+    y += overscan_offset_y;
+
+    y -= gfont->ascent;
+
+    gl->bindTexture(gl, &gfont->texture);
     gl->texEnvi(gl, GGL_TEXTURE_ENV, GGL_TEXTURE_ENV_MODE, GGL_REPLACE);
     gl->texGeni(gl, GGL_S, GGL_TEXTURE_GEN_MODE, GGL_ONE_TO_ONE);
     gl->texGeni(gl, GGL_T, GGL_TEXTURE_GEN_MODE, GGL_ONE_TO_ONE);
     gl->enable(gl, GGL_TEXTURE_2D);
 
-    while((off = *s++)) {
-        off -= 32;
-        if (off < 96) {
-            gl->texCoord2i(gl, (off * font->cwidth) - x, 0 - y);
-            gl->recti(gl, x, y, x + font->cwidth, y + font->cheight);
+     while((off = *s)) {
+        if(*((unsigned char*)(s)) < 0x20) {
+            s++;
+            continue;
         }
-        x += font->cwidth;
+        width = gfont->cwidth;
+        height = gfont->cheight;
+        off = ch_utf8_to_custom(s);
+        if(off >= 96)
+            width *= 2;
+        memcpy(&font_ftex, &gfont->texture, sizeof(font_ftex));
+        font_bitmap_width = (font.width % (font.cwidth * font_char_per_bitmap));
+        if(!font_bitmap_width)
+            font_bitmap_width = font.cwidth * font_char_per_bitmap;
+        font_ftex.width = font_bitmap_width;
+        font_ftex.stride = font_bitmap_width;
+        font_ftex.data = font_data[(off < 96) ? (off / font_char_per_bitmap) : ((96 + (off - 96) * 2) / font_char_per_bitmap)];
+        gl->bindTexture(gl, &font_ftex);
+        if(off >= 96)
+            gl->texCoord2i(gl, ((96 + (off - 96) * 2) * font.cwidth) % (font_char_per_bitmap * font.cwidth) - x, 0 - y);
+        else
+            gl->texCoord2i(gl, (off % font_char_per_bitmap) * width - x, 0 - y);
+        gl->recti(gl, x, y, x + width, y + height);
+        x += width;
+        n = ch_utf8_length(s);
+        if(n <= 0)
+            break;
+        s += n;
     }
 
     return x;
@@ -249,6 +334,9 @@ void gr_texticon(int x, int y, gr_surface icon) {
         return;
     }
     GGLContext* gl = gr_context;
+
+    x += overscan_offset_x;
+    y += overscan_offset_y;
 
     gl->bindTexture(gl, (GGLSurface*) icon);
     gl->texEnvi(gl, GGL_TEXTURE_ENV, GGL_TEXTURE_ENV_MODE, GGL_REPLACE);
@@ -263,11 +351,17 @@ void gr_texticon(int x, int y, gr_surface icon) {
     gl->recti(gl, x, y, x+gr_get_width(icon), y+gr_get_height(icon));
 }
 
-void gr_fill(int x, int y, int w, int h)
+void gr_fill(int x1, int y1, int x2, int y2)
 {
+    x1 += overscan_offset_x;
+    y1 += overscan_offset_y;
+
+    x2 += overscan_offset_x;
+    y2 += overscan_offset_y;
+
     GGLContext *gl = gr_context;
     gl->disable(gl, GGL_TEXTURE_2D);
-    gl->recti(gl, x, y, w, h);
+    gl->recti(gl, x1, y1, x2, y2);
 }
 
 void gr_blit(gr_surface source, int sx, int sy, int w, int h, int dx, int dy) {
@@ -275,6 +369,9 @@ void gr_blit(gr_surface source, int sx, int sy, int w, int h, int dx, int dy) {
         return;
     }
     GGLContext *gl = gr_context;
+
+    dx += overscan_offset_x;
+    dy += overscan_offset_y;
 
     gl->bindTexture(gl, (GGLSurface*) source);
     gl->texEnvi(gl, GGL_TEXTURE_ENV, GGL_TEXTURE_ENV_MODE, GGL_REPLACE);
@@ -301,14 +398,34 @@ unsigned int gr_get_height(gr_surface surface) {
 
 static void gr_init_font(void)
 {
-    GGLSurface *ftex;
+     GGLSurface *ftex;
     unsigned char *bits, *rle;
     unsigned char *in, data;
+    int i, d, n, bmp, pos;
 
     gr_font = calloc(sizeof(*gr_font), 1);
     ftex = &gr_font->texture;
 
-    bits = malloc(font.width * font.height);
+    font_bitmap_count = font.width / font.cwidth / font_char_per_bitmap + 1;
+    font_data = (void**)malloc(font_bitmap_count * sizeof(void*));
+    for(n = 0; n < font_bitmap_count; n++)
+    {
+        font_data[n] = malloc(font_char_per_bitmap * font.cwidth * font.cheight);
+        memset(font_data[n], 0, font_char_per_bitmap * font.cwidth * font.cheight);
+    }
+    d = 0;
+    in = font.rundata;
+    while((data = *in++))
+    {
+        n = data & 0x7f;
+        for(i = 0; i < n; i++, d++)
+        {
+            bmp = d % font.width / (font.cwidth * font_char_per_bitmap);
+            pos = d / font.width * (font.cwidth * font_char_per_bitmap) + (d % (font.cwidth * font_char_per_bitmap));
+            ((unsigned char*)(font_data[bmp]))[pos] = (data & 0x80) ? 0xff : 0;
+        }
+    }
+    bits = font_data[0];
 
     ftex->version = sizeof(*ftex);
     ftex->width = font.width;
@@ -317,15 +434,11 @@ static void gr_init_font(void)
     ftex->data = (void*) bits;
     ftex->format = GGL_PIXEL_FORMAT_A_8;
 
-    in = font.rundata;
-    while((data = *in++)) {
-        memset(bits, (data & 0x80) ? 255 : 0, data & 0x7f);
-        bits += (data & 0x7f);
-    }
-
     gr_font->cwidth = font.cwidth;
     gr_font->cheight = font.cheight;
     gr_font->ascent = font.cheight - 2;
+
+
 }
 
 int gr_init(void)
@@ -385,12 +498,12 @@ void gr_exit(void)
 
 int gr_fb_width(void)
 {
-    return gr_framebuffer[0].width;
+    return gr_framebuffer[0].width - 2*overscan_offset_x;
 }
 
 int gr_fb_height(void)
 {
-    return gr_framebuffer[0].height;
+    return gr_framebuffer[0].height - 2*overscan_offset_y;
 }
 
 gr_pixel *gr_fb_data(void)
@@ -406,3 +519,5 @@ void gr_fb_blank(bool blank)
     if (ret < 0)
         perror("ioctl(): blank");
 }
+
+

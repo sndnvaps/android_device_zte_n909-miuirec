@@ -16,13 +16,13 @@
 
 /cache		ext4		/dev/block/platform/msm_sdcc.3/by-num/p15
 /recovery	emmc		/dev/block/platform/msm_sdcc.3/by-num/p16
-/misc		emmc		/dev/block/platform/msm_sdcc.3/by-num/p17
+/misc		emmc	       	/dev/block/platform/msm_sdcc.3/by-num/p17
 /FOTA		emmc		/dev/block/platform/msm_sdcc.3/by-num/p18
 /splash 	emmc		/dev/block/platform/msm_sdcc.3/by-num/p19
 #/emmc	vfat		/dev/block/platform/msm_sdcc.3/by-num/p20
-/internal_sd    vfat          /dev/block/platform/msm_sdcc.3/by-num/p20
-#/external_sd      vfat          /dev/block/platform/msm_sdcc.3/by-num/p20
-/sdcard		 vfat		/dev/block/mmcblk1p1	/dev/block/mmcblk1
+#/internal_sd    vfat          /dev/block/platform/msm_sdcc.3/by-num/p20
+/external_sd      vfat          /dev/block/platform/msm_sdcc.3/by-num/p20
+/sdcard		 vfat		/dev/block/mmcblk1p1	/dev/block/mmcblk1 
 #/internal_sd     vfat             /dev/block/mmcblk1p1	/dev/block/mmcblk1
 
 #modify by sndnvaps@gmail.com 
