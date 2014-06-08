@@ -63,12 +63,12 @@ TW_DEFAULT_EXTERNAL_STORAGE := true
 
 # enable touch event logging to help debug touchscreen issues (before release )
 TW_EVENT_LOGGING := true
-#TW_BOARD_CUSTOM_GRAPHICS := ../../../device/ZTE/N909/recovery/twrp-graphics.c
+#TW_BOARD_CUSTOM_GRAPHICS := ../../../device/ZTE/N909/recovery/twrp-graphics.c     #这是编译TWRP的选项，编译TWRP的时候，去掉最前面的 '#' ，就可以编译了。
 TW_BOARD_CHN_GRAPHICS := true
 TW_RECOVERY_BLACK_SCREEN := true 
 
 #BOARD_CUSTOM_GRAPHICS := ../../../device/ZTE/N909/graphics.c
-BOARD_CUSTOM_CN_GRAPHICS := ../../../device/ZTE/N909/recovery/graphics_cn.c
+BOARD_CUSTOM_CN_GRAPHICS := ../../../device/ZTE/N909/recovery/graphics_cn.c    #这是编译中文版CWM的选项，在编译TWRP的时候，要关闭
 #BOARD_USE_CUSTOM_RECOVERY_FONT := "font_cn_16x16.h"
 
 # Vold and FS
